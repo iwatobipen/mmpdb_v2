@@ -32,7 +32,7 @@ def make_environment_smi(mmpdb_con, medchem_move_con, radi=3):
             medchem_move_cur.execute("INSERT INTO environment_smi values({env_smi});")
         except:
             print(f"{env_smi} is already exist")
-        if idx %% 10000 == 0:
+        if idx % 10000 == 0:
             print(f"{idx} mol proceeded")
     medchem_move_con.commit()
     print("done environment_smi")
@@ -64,4 +64,4 @@ def make_fragment_smi(mmpdb_con, medchem_move_con):
 def make_transformations(mmpdb_con, medchem_move_con):
     mmpdb_cur = mmpdb_con.cursor()
     medchem_move_cur = medchem_move_con.cursor()
-    sql = """SELECT  
+    sql = """"""

@@ -51,6 +51,7 @@ else:
     def fingerprint_to_text(s):
         return s.decode("ascii")
 
+
 # Internal helper class
 class EnvironmentCenters(object):
     def __init__(self, mol, atom_ids):
@@ -60,19 +61,21 @@ class EnvironmentCenters(object):
     def __repr__(self):
         return "EnvironmentCenters(%r, %r)" % (self.mol, self.atom_ids)
 
-class EnvironmentFingerprint(object):
-    __slots__ = ("radius", "fingerprint")
 
-    def __init__(self, radius, fingerprint):
+class EnvironmentFingerprint(object):
+    __slots__ = ("radius", "fingerprint", "env_smi")
+
+    def __init__(self, radius, fingerprint, env_smi):
         self.radius = radius
         self.fingerprint = fingerprint
-    
+        self.env_smi = env_smi
+
 
 def find_centers(smiles):
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         raise ValueError("Could not parse the context SMILES %r" % (smiles,))
-    
+
     # Figure out which atoms to use as the centers
     centers = {}
     for atom_idx, atom in enumerate(mol.GetAtoms()):
@@ -82,11 +85,11 @@ def find_centers(smiles):
 
         # Don't need to clear the property because RDKit's Morgan fingerprint
         # doesn't use it.
-        #atom.ClearProp("molAtomMapNumber")
+        # atom.ClearProp("molAtomMapNumber")
         assert mapno not in centers, (mapno, smiles)
 
         centers[mapno] = atom_idx
-            
+
     if not centers:
         raise ValueError("No attachment points found in context SMILES %r" % (smiles,))
 
@@ -111,39 +114,41 @@ def find_centers(smiles):
 
     return EnvironmentCenters(mol, ordered_centers)
 
+
 # Get each of the atoms counts radii as it's being computed.
 def iter_num_atoms_for_radii(centers, max_radius):
     return _iter_num_atoms_for_radii(centers.mol, max_radius, centers.atom_ids)
 
+
 # My thought is to use this for testing.
-def _iter_num_atoms_for_radii(mol, max_radius, start_atoms): 
+def _iter_num_atoms_for_radii(mol, max_radius, start_atoms):
     atom_objs = list(mol.GetAtoms())
-    
+
     unique_atoms = set(start_atoms)
     assert len(start_atoms) == len(unique_atoms), "duplicate start atom"
     ignore_atoms = set(a for a in start_atoms if not is_heavy_atom(mol.GetAtomWithIdx(a)))
-    
+
     yield (len(unique_atoms) - len(ignore_atoms))
-    
+
     border_atoms = unique_atoms.copy()
-    
+
     for radius in range(max_radius):  # up to and including max_radius
         new_atoms = set()
-        
+
         for atom in border_atoms:
             for neighbor_atom_obj in mol.GetAtomWithIdx(atom).GetNeighbors():
                 neighbor_atom = neighbor_atom_obj.GetIdx()
                 if neighbor_atom not in unique_atoms:
                     unique_atoms.add(neighbor_atom)
                     new_atoms.add(neighbor_atom)
-                    
+
                     if not is_heavy_atom(neighbor_atom_obj):
                         ignore_atoms.add(neighbor_atom)
 
         border_atoms = new_atoms
         yield (len(unique_atoms) - len(ignore_atoms))
 
-    
+
 def is_heavy_atom(atom_obj):
     # Exclude '*' and '[H]' atoms (but count '[1H]', '[2H]', etc.)
     eleno = atom_obj.GetAtomicNum()
@@ -162,11 +167,28 @@ def find_center_fingerprints(centers, radius):
     return center_fps
 
 
+def find_center_Environment(centers, radius):
+    center_environment = ""
+    for atom_idx in centers.atom_ids:
+        env = Chem.FindAtomEnvironmentOfRadiusN(centers.mol, radius, atom_idx)
+        amap = {}
+        submol = Chem.PathToSubmol(centers.mol, env, atomMap=amap)
+        env_smi = Chem.MolToSmiles(submol)
+        if center_environment == "":
+            center_environment = env_smi
+        else:
+            center_environment = center_environment + "." + env_smi
+
+    if center_environment == "":
+        center_environment = "NA"
+    return center_environment
+
+
 def _make_fp(*center_fps):
     concat_fp = hashlib.new("sha256")
     for center_fp in center_fps:
         concat_fp.update(center_fp)
-        
+
     sha2_digest = concat_fp.digest()
     env_fp = binascii.b2a_base64(sha2_digest)
     assert env_fp[-2:] == b"=\n", env_fp
@@ -195,6 +217,7 @@ def find_environment_fingerprint(centers, radius):
     concat_fp = _make_fp(*find_center_fingerprints(centers, radius))
     return concat_fp
 
+
 # The input is a SMILES for the constant term, like
 #   CCC([*:2])CCC([*:1])CCCCCC[*:3]
 # The centers are the attachment points 1, 2, and 3.
@@ -202,11 +225,12 @@ def find_environment_fingerprint(centers, radius):
 
 def compute_constant_environment_from_centers(centers, max_radius=5):
     env_fps = []
-    for radius in range(max_radius+1):
+    for radius in range(max_radius + 1):
         fingerprint = find_environment_fingerprint(centers, radius)
+        center_environment = find_center_Environment(centers, radius)
         env_fps.append(
-            EnvironmentFingerprint(radius, fingerprint)
-            )
+            EnvironmentFingerprint(radius, fingerprint, center_environment)
+        )
 
     return env_fps
 
@@ -229,21 +253,55 @@ def compute_constant_center_fingerprints(constant_smiles, min_radius=0, max_radi
         i = 0
         i = constant_smiles.find(wildcard, i)
         if i >= 0:
-            constant_smiles = constant_smiles[:i] + "[*:1]" + constant_smiles[i+width:]
-            i = constant_smiles.find(wildcard, i+5)
+            constant_smiles = constant_smiles[:i] + "[*:1]" + constant_smiles[i + width:]
+            i = constant_smiles.find(wildcard, i + 5)
             if i >= 0:
-                constant_smiles = constant_smiles[:i] + "[*:2]" + constant_smiles[i+width:]
-                i = constant_smiles.find(wildcard, i+5)
+                constant_smiles = constant_smiles[:i] + "[*:2]" + constant_smiles[i + width:]
+                i = constant_smiles.find(wildcard, i + 5)
                 if i >= 0:
-                    constant_smiles = constant_smiles[:i] + "[*:3]" + constant_smiles[i+width:]
+                    constant_smiles = constant_smiles[:i] + "[*:3]" + constant_smiles[i + width:]
 
     env_centers = find_centers(constant_smiles)
 
     all_center_fps = []
-    for radius in range(min_radius, max_radius+1):
+    for radius in range(min_radius, max_radius + 1):
         all_center_fps.append(find_center_fingerprints(env_centers, radius))
 
     return all_center_fps
+
+
+def compute_constant_center_fingerprints_atFixRadii(constant_smiles, radius):
+    # If the constant is unlabeled, get the labeled version.
+    if "*" in constant_smiles:
+        # Handle differences in * representation in pre/post 2018 versions of RDKit
+        if "[*]" in constant_smiles:
+            wildcard = "[*]"
+            width = 3
+        else:
+            wildcard = "*"
+            width = 1
+        # The conversion is direct; it's already canonical, in the order 1, 2, 3.
+        # The following works for 1, 2, or 3 attachment points. If n=1 then
+        # the last two replace() functions do nothing.
+        # The main problem that if the wildcard is "*" then I can't do a
+        # simple string substitution otherwise I'll match the previous *.
+        i = 0
+        i = constant_smiles.find(wildcard, i)
+        if i >= 0:
+            constant_smiles = constant_smiles[:i] + "[*:1]" + constant_smiles[i + width:]
+            i = constant_smiles.find(wildcard, i + 5)
+            if i >= 0:
+                constant_smiles = constant_smiles[:i] + "[*:2]" + constant_smiles[i + width:]
+                i = constant_smiles.find(wildcard, i + 5)
+                if i >= 0:
+                    constant_smiles = constant_smiles[:i] + "[*:3]" + constant_smiles[i + width:]
+
+    env_centers = find_centers(constant_smiles)
+    all_center_fps = []
+    all_center_fps.append(find_center_fingerprints(env_centers, radius))
+
+    return all_center_fps
+
 
 ######
 
@@ -252,17 +310,17 @@ def compute_constant_center_fingerprints(constant_smiles, min_radius=0, max_radi
 _invert_order_table = {
     None: None,
     "1": None,
-    
+
     "12": None,
     "21": (1, 0),
-    
+
     "123": None,
     "132": (0, 2, 1),
     "213": (1, 0, 2),
     "231": (2, 0, 1),
     "312": (1, 2, 0),
     "321": (2, 1, 0),
-    }
+}
 
 
 def compute_possible_environments(center_fps, symmetry_class, reorder=None):
@@ -327,6 +385,7 @@ def compute_possible_environments(center_fps, symmetry_class, reorder=None):
         raise AssertionError("I forgot one: %r" % (symmetry_class,))
 
     return list(fps)
+
 
 ## def generate_all_possible_constant_fingerprints(constant_smiles):
 ##     # The n circular fingerprints around each of the n attachment points, for each possible radius
