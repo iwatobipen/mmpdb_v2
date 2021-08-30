@@ -700,7 +700,6 @@ def get_max_radius_for_fraction_transfer(
     ## print("best", smirks, constant_smiles, best_radius)
     return best_radius
 
-
 class EnvironmentCache(object):
     def __init_(self, index_cache):
         self.index_cache = index_cache
@@ -1127,6 +1126,138 @@ class EnvironmentFingerprintTableParent:
             self.EnvironmentFingerprint[env_fp] = idx
             return idx
 
+########
+## TAKA
+########
+class EnvironmentFpTable(dict):
+    def __init__(self, backend):
+        self.backend = backend
+
+    def __missing__(self, env_fp):
+        idx = len(self)
+        self.backend.add_environment_fp(idx, env_fp)
+        self[env_fp] = idx
+        return idx
+
+#not implemented
+class EnvironmentSmiTable(dict):
+    def __init__(self, backend):
+        self.backend = backend
+
+    def __missing__(self, env_smi):
+        idx = len(self)
+        self.backend.add_environment_smi(idx, env_smi)
+        self[env_smi] = idx
+        return idx
+
+#not implemented
+class FragentSmiTalbe(dict):
+    def __init__(self, backend):
+        self.backend = backend
+
+    def __missing__(self, smiles):
+        idx = len(self)
+        self.backend.add_frag_smiles(idx, smiles)
+        self[smiles] = idx
+        return idx
+
+
+## _heap = None
+class MoveWriter(BaseWriter):
+    def start(self):
+        self._environment_pair_id_counter = itertools.count(0)
+        self._environment_cache = EnvironmentCache()
+
+        self.property_name_idxs = property_name_idxs = []
+        if self.properties is not None:
+            for property_name_idx, property_name in enumerate(self.properties.property_names):
+                self.backend.add_property_name(property_name_idx, property_name)
+                property_name_idxs.append(property_name_idx)
+        
+        self._fragment_smi_table = FragentSmiTalbe(self.backend)
+        self._envmironment_smi_table = EnvironmentSmiTable(self.backend)
+        self._environment_fp_table = EnvironmentFpTable(self.backend)     # Added for parent indexing
+        self.backend.start(self.fragment_options, self.index_options)
+        self.num_pairs = 0
+                
+    def end(self, reporter=None):
+        reporter = reporters.get_reporter(reporter)
+        if self.properties is not None:
+            add_rule_environment_statistics = self.backend.add_rule_environment_statistics
+
+            for property_i, property_name_idx in enumerate(self.property_name_idxs):
+                property_name = self.properties.property_names[property_i]
+                with reporter.progress(self._rule_environment_table.iter_sorted_rule_environments(),
+                                       "Writing rule statistics for property %s:" % (property_name,),
+                                       len(self._rule_environment_table)) as rule_env_iter:
+                    for rule_env in rule_env_iter:
+                        value_list = rule_env.property_value_lists[property_i]
+                        if value_list:
+                            add_rule_environment_statistics(
+                                rule_env.idx, property_name_idx,
+                                compute_aggregate_values(value_list))
+
+        self.backend.end(reporter)
+
+    #MatchedMolecularPair(tmp_id1, tmp_id2, smirks, tmp_constant_smiles, max_radius)
+
+    # RULESWITHENV_DICT, INDEX_TO_FINGERPRINT, INDEX_TO_ENVSMI
+
+    def write_move(self, pairs):
+        # The main entry point for writing results to a file.
+        from collections import defaultdict
+        rule_frequency_counter = defaultdict(int)
+        pair_i = -1
+        '''
+        self._fragment_smi_table = FragentSmiTalbe(self.backend)
+        self._envmironment_smi_table = EnvironmentSmiTable(self.backend)
+        self._environment_fp_table = EnvironmentFpTable(self.backend) 
+        '''
+        for pair_i, pair in enumerate(pairs):
+            # Figure out which rule it goes into.
+            rule_idx = self._rule_table[pair.smirks]
+            rule_frequency_counter[rule_idx] += 1
+            # Get the environment for the constant part, at different radii.
+            rule_envs = self._get_rule_environments4tf(rule_idx, pair.constant_smiles, pair.max_constant_radius)
+            if rule_envs:
+                compound1_idx = pair.id1
+                compound2_idx = pair.id2
+                constant_idx = self._constant_smiles_table[pair.constant_smiles]
+                lhs_idx = self._fragment_smi_table[pair.smirks.split('>>')[0]]
+                rhs_idx = self._fragment_smi_table[pair.smirks.split('>>')[1]]
+                for rule_env in rule_envs:
+                    env_smi_idx = self._envmironment_smi_table[rule_env.envsmi]
+                    pair_idx = next(self._environment_pair_id_counter)
+                    # then the rule_env is an integer
+                    #self.backend.add_rule_environment_pair(
+                    #    pair_idx, rule_env, compound1_idx, compound2_idx, constant_idx)
+                        
+        self.num_pairs += (pair_i + 1)
+        
+    def _get_rule_environments4tf(self, rule_idx, constant_smiles, max_radius):
+        # XXX Add another layer of cache? I don't think it makes much sense.
+        # env_fp > env_smi, fingerprint, radius
+        env_fps = self._environment_cache.get_or_compute_constant_environment(constant_smiles, max_radius)
+        rule_envs = []
+        for env_fp in env_fps:
+            env_fp_idx = self._environment_fp_table[env_fp.fingerprint]     # Modified for parent indexing
+            env_smi_idx = self._envmironment_smi_table[env_fp.env_smi]
+            # NOTE: "string-encoded-key"
+            # Originally I stored the tuple directly. This ends up using a lot of space
+            # because there can be tens of millions of rule environments. A 3-element
+            # tuple needs 80 bytes on CPython 2.7 and 72 on CPython 3.6, plus the space
+            # for each of the integers. The radius is small, so CPython uses a cached
+            # value. Still, that's 28 or 2*28 bytes extra.
+            # On the other hand, an encoded-string takes only about 70 bytes total.
+            # Across 10M objects, this saves about 10E6*(110-70)/1024/1024 = 380 GB.
+            key = "%d,%d,%d" % (rule_idx, env_fp_idx, env_fp.radius)
+            rule_env = self._rule_environment_table[key]
+            rule_envs.append(rule_env)
+
+        return rule_envs
+########
+##TAKA
+########
 
 class CompoundTable(dict):
     def __init__(self, fragment_index, property_name_idxs, properties, backend):
@@ -1152,7 +1283,17 @@ class CompoundTable(dict):
                     self.backend.add_compound_property(compound_idx, property_idx, value)
             
         return compound_idx
+'''
+#Fragment_smi_Table == RuleSmilesTable
 
+class Environment_smiTable(dict):
+    
+class Environment_fpTable(dict):
+
+class TransformationsTable(dict):
+
+
+'''
 
 ## _heap = None    
 class MMPWriter(BaseWriter):
@@ -1550,3 +1691,17 @@ class RuleEnvironment(object):
                 continue
             delta = value2-value1
             property_list.append(delta)
+
+
+
+
+from collections import defaultdict
+def findRulesAndEnvs(fragment_index, fragment_reader, index_options, environment_cache, max_radius, reporter):
+    RULESWITHENV_DICT = defaultdict(int)
+    INDEX_TO_FINGERPRINT = {}
+    INDEX_TO_ENVSMI = {}
+    # RULESWITHENV_DICT {(RULE_FP_IDX, RULE_RADIUS, RULE_SMIRKS_IDX):FREQ}
+    # INDEX_TO_FP DICT
+    # INDEX_TO_ENVSMI DICT
+
+    return RULESWITHENV_DICT, INDEX_TO_FINGERPRINT, INDEX_TO_ENVSMI

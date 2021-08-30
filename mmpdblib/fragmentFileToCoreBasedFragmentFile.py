@@ -2,7 +2,8 @@ import os
 import argparse
 import json
 import copy
-
+import sqlite3
+import shelve
 #####################################################
 
 # This script groups the fragmentation records based on a scaffold.
@@ -20,8 +21,9 @@ normalizesSmiles_to_ids = {}
 #####################################################
 def read_frag_files(args):
     # a dictionary to hold core based fragment record
-    core_to_fragmentation = {}
-
+    
+    #core_to_fragmentation = {}
+    core_to_fragmentation = shelve.open('core_to_fragmentation.db')
     # input folder
     infiles = os.listdir(args.fragment_folder)
 
@@ -59,6 +61,7 @@ def read_frag_files(args):
                     core_to_fragmentation[core].append(new_record)
                 else:
                     core_to_fragmentation[core] = [new_record]
+        print(file)
         print("DONE WITH FILE: ", len(core_to_fragmentation))
 
     print("DONE READING, TOTAL CORES: ", len(core_to_fragmentation))
@@ -116,5 +119,5 @@ def read_frag_files(args):
                 filew.write(record + "\n")
             num_written = num_written + no_of_records
     filew.close()
-
+    core_to_fragmentation.close()
 read_frag_files(args)

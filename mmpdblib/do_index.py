@@ -187,6 +187,25 @@ def index_command(parser, args):
     start_mmp_memory = get_memory_use()
     environment_cache = index_algorithm.EnvironmentCache()
 
+
+    # get environment_cachethe rule (fp, radius, smirks and count)
+    RULESWITHENV_DICT, INDEX_TO_FINGERPRINT, INDEX_TO_ENVSMI = index_algorithm.findRulesAndEnvs(
+        fragment_index, fragment_reader, index_options, environment_cache,
+        max_radius=args.max_radius, reporter=reporter)
+
+    # only possible at the moment with csv
+    # write out to table
+    with open(args.output, "w") as fwriter:
+        fwriter.write("rule_smirks\tradius\tenvfp\tenv\tfrequency\n")
+        for rule in RULESWITHENV_DICT:
+            rule_fp = INDEX_TO_FINGERPRINT[rule[0]]
+            rule_radius = rule[1]
+            rule_smirks = rule[2]
+            rule_env = INDEX_TO_ENVSMI[rule[3]]
+            freq = RULESWITHENV_DICT[rule]
+            fwriter.write(
+                rule_smirks + "\t" + str(rule_radius) + "\t" + str(rule_fp) + "\t" + rule_env + "\t" + str(freq) + "\n")
+'''
     pairs = index_algorithm.find_matched_molecular_pairs(
         fragment_index, fragment_reader, index_options, environment_cache,
         max_radius=args.max_radius, reporter=reporter)
@@ -214,4 +233,4 @@ def index_command(parser, args):
                          human_memory(start_mmp_memory - start_fragment_index_memory),
                          human_memory(end_mmp_memory - start_mmp_memory)))
         
-
+'''
